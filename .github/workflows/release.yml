@@ -1,0 +1,92 @@
+name: Release
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release level from labels
+        id: release-level
+        run: |
+          LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          if echo "$LABELS" | grep -q "release/major"; then
+            echo "level=major" >> "$GITHUB_OUTPUT"
+          elif echo "$LABELS" | grep -q "release/minor"; then
+            echo "level=minor" >> "$GITHUB_OUTPUT"
+          elif echo "$LABELS" | grep -q "release/patch"; then
+            echo "level=patch" >> "$GITHUB_OUTPUT"
+          else
+            echo "level=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get latest tag
+        id: latest-tag
+        if: steps.release-level.outputs.level != ''
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version
+        id: bump
+        if: steps.release-level.outputs.level != ''
+        run: |
+          TAG="${{ steps.latest-tag.outputs.tag }}"
+          LEVEL="${{ steps.release-level.outputs.level }}"
+
+          # Strip 'v' prefix for parsing
+          VERSION="${TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          case "$LEVEL" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        if: steps.bump.outputs.new_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_TAG="${{ steps.bump.outputs.new_tag }}"
+          PREV_TAG="${{ steps.latest-tag.outputs.tag }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+
+          # Generate changelog from commits between tags
+          CHANGELOG=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges 2>/dev/null || echo "- ${PR_TITLE}")
+
+          gh release create "$NEW_TAG" \
+            --title "Version ${NEW_TAG}" \
+            --notes "### Changelog
+
+          ${CHANGELOG}
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${NEW_TAG}"
+
+      - name: Comment on PR
+        if: steps.bump.outputs.new_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body "Released [${{ steps.bump.outputs.new_tag }}](https://github.com/${{ github.repository }}/releases/tag/${{ steps.bump.outputs.new_tag }})"

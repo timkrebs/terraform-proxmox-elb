@@ -1,0 +1,5 @@
+proxmox_api_url   = "https://pve.example.com:8006"
+proxmox_api_token = "user@pam!terraform=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+ssh_private_key   = "~/.ssh/id_rsa"
+ssh_public_key    = "ssh-rsa AAAAB3... user@host"
+stats_password    = "supersecretpassword"

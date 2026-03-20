@@ -1,0 +1,115 @@
+#cloud-config
+
+package_update: true
+
+packages:
+  - haproxy
+
+write_files:
+  - path: /etc/haproxy/haproxy.cfg
+    owner: root:root
+    permissions: "0644"
+    content: |
+      #---------------------------------------------------------------------
+      # Global settings
+      #---------------------------------------------------------------------
+      global
+          log         /dev/log local0
+          log         /dev/log local1 notice
+          chroot      /var/lib/haproxy
+          stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+          stats timeout 30s
+          maxconn     4096
+          user        haproxy
+          group       haproxy
+          daemon
+
+      #---------------------------------------------------------------------
+      # Default settings
+      #---------------------------------------------------------------------
+      defaults
+          log     global
+%{ if type == "application" ~}
+          mode    http
+          option  httplog
+%{ else ~}
+          mode    tcp
+          option  tcplog
+%{ endif ~}
+          option  dontlognull
+          timeout connect 5000ms
+          timeout client  50000ms
+          timeout server  50000ms
+          retries 3
+          option  redispatch
+%{ if type == "application" ~}
+          option  forwardfor
+          option  http-server-close
+%{ endif ~}
+
+%{ if stats_enabled ~}
+      #---------------------------------------------------------------------
+      # Stats frontend
+      #---------------------------------------------------------------------
+      frontend stats
+          bind *:${stats_port}
+          mode http
+          stats enable
+          stats uri ${stats_uri}
+          stats refresh 10s
+          stats auth ${stats_username}:${stats_password}
+          stats admin if TRUE
+
+%{ endif ~}
+      #---------------------------------------------------------------------
+      # Frontends & Backends
+      #---------------------------------------------------------------------
+%{ for listener in listeners ~}
+      frontend ft_${listener.name}
+          bind *:${listener.frontend_port}
+%{ if type == "application" ~}
+          mode http
+%{ else ~}
+          mode tcp
+%{ endif ~}
+          default_backend bk_${listener.name}
+
+      backend bk_${listener.name}
+%{ if type == "application" ~}
+          mode    http
+%{ else ~}
+          mode    tcp
+%{ endif ~}
+          balance ${listener.balance_algorithm}
+%{ if type == "application" ~}
+          option  httpchk GET /
+          http-check expect status 200
+%{ endif ~}
+%{ for server in backend_servers ~}
+          server ${server.name} ${server.address}:${listener.backend_port} check inter ${health_check_interval}s fall 3 rise 2 timeout check ${health_check_timeout}s
+%{ endfor ~}
+
+%{ endfor ~}
+
+  - path: /opt/elb/setup-haproxy.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      echo "[elb] Validating HAProxy configuration..."
+      haproxy -c -f /etc/haproxy/haproxy.cfg
+
+      echo "[elb] Enabling IP forwarding..."
+      sysctl -w net.ipv4.ip_forward=1
+      echo "net.ipv4.ip_forward=1" >> /etc/sysctl.d/99-haproxy.conf
+
+      echo "[elb] Enabling and restarting HAProxy..."
+      systemctl enable haproxy
+      systemctl restart haproxy
+
+      echo "[elb] HAProxy setup complete for ${identifier}"
+
+runcmd:
+  - bash /opt/elb/setup-haproxy.sh
