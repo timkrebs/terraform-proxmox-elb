@@ -1,0 +1,27 @@
+name: PR Title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate semantic PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          PATTERN='^(feat|fix|improvement|docs|refactor|test|ci|chore)(\(.+\))?: .+$'
+          if [[ "$PR_TITLE" =~ $PATTERN ]]; then
+            echo "✅ PR title is valid: $PR_TITLE"
+          else
+            echo "❌ PR title does not follow conventional commits format."
+            echo ""
+            echo "Expected: <type>: <description>"
+            echo "Types:    feat, fix, improvement, docs, refactor, test, ci, chore"
+            echo "Example:  feat: add support for custom memory settings"
+            echo ""
+            echo "Got:      $PR_TITLE"
+            exit 1
+          fi
